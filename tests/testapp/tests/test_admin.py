@@ -575,10 +575,12 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         blog_post = AdminBlogPost.objects.create(title="Article name")
         assert blog_post.state == AdminBlogPostState.CREATED
 
-        with mock.patch(
-            "tests.testapp.models.AdminBlogPost.moderate",
+        failing_moderate = mock.Mock(
+            _django_fsm=AdminBlogPost.moderate._django_fsm,  # type: ignore[attr-defined]
             side_effect=fsm.ConcurrentTransition("error message"),
-        ):
+        )
+
+        with mock.patch("tests.testapp.models.AdminBlogPost.moderate", failing_moderate):
             self.model_admin.response_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "moderate"},
