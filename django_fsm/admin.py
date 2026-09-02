@@ -230,9 +230,9 @@ class FSMAdminMixin(_ModelAdmin):
 
     def _get_fsm_transition_func(
         self, *, obj: fsm._FSMModel, transition_name: str
-    ) -> fsm._TransitionFunc:
+    ) -> fsm._TransitionMethod:
         try:
-            transition_func: fsm._TransitionFunc = getattr(obj, transition_name)
+            transition_func: fsm._TransitionMethod = getattr(obj, transition_name)
         except AttributeError:
             raise AttributeError(
                 f"{obj.__class__.__name__} has no transition method '{transition_name}'."
@@ -251,12 +251,8 @@ class FSMAdminMixin(_ModelAdmin):
         self, *, obj: fsm._FSMModel, transition_name: str
     ) -> fsm.Transition:
         transition_func = self._get_fsm_transition_func(obj=obj, transition_name=transition_name)
-        transitions = transition_func._django_fsm.transitions  # type: ignore[attr-defined]
-        if isinstance(transitions, dict):
-            transitions = list(transitions.values())
-
-        # Each transition method stores one transition per target field; first entry is sufficient.
-        return transitions[0]  # type: ignore[no-any-return]
+        # Each transition method stores one transition per source; first entry is sufficient.
+        return next(iter(transition_func._django_fsm.transitions.values()))
 
     @staticmethod
     def _is_fsm_log_enabled() -> bool:
@@ -368,7 +364,7 @@ class FSMAdminMixin(_ModelAdmin):
             self._log_fsm_transition(
                 request=request,
                 obj=obj,
-                field=transition_func._django_fsm.field,  # type: ignore[attr-defined]
+                field=transition_func._django_fsm.field,
             )
             return True
 
