@@ -12,11 +12,8 @@ Unreleased
 - Move admin transition buttons after save buttons so that a transition is not used as the default button when pressing the Enter key (#145)
 - Fix ``FSMAdminMixin`` not enforcing a transition's ``permission`` when applied via
   ``_apply_fsm_transition`` directly, i.e. the submit-row button for transitions with no
-  form configured (the common case), or custom admin actions that call
-  ``_apply_fsm_transition``. Transitions with a form were already protected by the
-  existing ``has_perm()`` check in ``fsm_transition_view``. **Behavior change:** if you
-  have a ``permission`` set on a transition, it is now actually enforced on these paths,
-  where it previously silently was not
+  form configured (the common case). **Behavior change:** if you have a
+  ``permission`` set on a transition, it is now actually enforced on these paths
 - Fix ``FSMAdminMixin`` not writing a Django admin ``LogEntry`` for applied transitions,
   so state changes made in the admin no longer disappear from the object's "History"
 
