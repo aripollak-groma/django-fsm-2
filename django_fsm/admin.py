@@ -281,6 +281,31 @@ class FSMAdminMixin(_ModelAdmin):
         else:
             transition_func(**kwargs)
 
+    def _check_fsm_transition_perm(
+        self, *, obj: fsm._FSMModel, transition: fsm.Transition, request: http.HttpRequest
+    ) -> bool:
+        """Check `has_perm()`, messaging the user on denial."""
+        if transition.has_perm(obj, user=request.user):
+            return True
+
+        self.message_user(
+            request=request,
+            message=self.fsm_transition_not_allowed_msg.format(
+                transition_name=transition.name,
+            ),
+            level=messages.ERROR,
+        )
+        return False
+
+    def _log_fsm_transition(
+        self, *, request: http.HttpRequest, obj: fsm._FSMModel, field: fsm.FSMFieldMixin
+    ) -> None:
+        """Record the transition in the admin change history (LogEntry)."""
+        try:
+            self.log_change(request, obj, [{"changed": {"fields": [str(field.verbose_name)]}}])
+        except Exception:
+            logger.exception("Failed to write admin log entry for FSM transition")
+
     def _apply_fsm_transition(
         self,
         *,
@@ -289,11 +314,15 @@ class FSMAdminMixin(_ModelAdmin):
         request: http.HttpRequest,
         kwargs: typing.Mapping[str, typing.Any] | None = None,
     ) -> bool:
+        transition_func = self._get_fsm_transition_func(obj=obj, transition_name=transition_name)
+        transition = self._get_fsm_transition_by_name(obj=obj, transition_name=transition_name)
+
+        if not self._check_fsm_transition_perm(obj=obj, transition=transition, request=request):
+            return False
+
         try:
             self._execute_fsm_transition(
-                transition_func=self._get_fsm_transition_func(
-                    obj=obj, transition_name=transition_name
-                ),
+                transition_func=transition_func,
                 request=request,
                 kwargs=kwargs,
             )
@@ -336,6 +365,11 @@ class FSMAdminMixin(_ModelAdmin):
                 ),
                 level=messages.SUCCESS,
             )
+            self._log_fsm_transition(
+                request=request,
+                obj=obj,
+                field=transition_func._django_fsm.field,  # type: ignore[attr-defined]
+            )
             return True
 
     # Form handling
@@ -351,14 +385,7 @@ class FSMAdminMixin(_ModelAdmin):
 
         transition = self._get_fsm_transition_by_name(obj=obj, transition_name=transition_name)
 
-        if not transition.has_perm(obj, user=request.user):
-            self.message_user(
-                request=request,
-                message=self.fsm_transition_not_allowed_msg.format(
-                    transition_name=transition_name,
-                ),
-                level=messages.ERROR,
-            )
+        if not self._check_fsm_transition_perm(obj=obj, transition=transition, request=request):
             return redirect(
                 f"admin:{self.model._meta.app_label}_{self.model._meta.model_name}_change",
                 object_id=obj.pk,
