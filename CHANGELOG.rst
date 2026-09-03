@@ -10,6 +10,7 @@ Unreleased
 - Add ``TransitionConditionsUnmet`` with ``failed_condition`` for unmet conditions
 - Add ``NoTransition`` and ``InvalidTransition`` subclasses for ``TransitionNotAllowed``
 - Move admin transition buttons after save buttons so that a transition is not used as the default button when pressing the Enter key (#145)
+- Fix stray "None"s in admin when a transition has no configured ``help_text`` (#148)
 
 
 django-fsm-2 4.2.4 2026-03-16
