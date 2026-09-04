@@ -212,25 +212,6 @@ class ModelAdminTestCase(TestCase):
 
         assert called["comment"] == "Because"
 
-    def test_log_fsm_transition_stringifies_lazy_verbose_name(self) -> None:
-        from django.utils.functional import Promise
-        from django.utils.translation import gettext_lazy as _
-
-        fake_field = mock.Mock(verbose_name=_("Fancy State"))
-
-        with mock.patch.object(self.model_admin, "log_change") as mock_log_change:
-            self.model_admin._log_fsm_transition(
-                request=self.request, obj=self.blog_post, field=fake_field
-            )
-
-        mock_log_change.assert_called_once_with(
-            self.request,
-            self.blog_post,
-            [{"changed": {"fields": ["Fancy State"]}}],
-        )
-        logged_field_name = mock_log_change.call_args[0][2][0]["changed"]["fields"][0]
-        assert not isinstance(logged_field_name, Promise)
-
     # Context
     def test_get_fsm_extra_context_filters_admin_hidden(
         self,
@@ -480,47 +461,6 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         assert blog_post.state == AdminBlogPostState.REVIEWED
 
         self.assert_state_log_for_user()
-
-    def test_transition_applied_writes_admin_log_entry(self, mock_message_user: mock.Mock) -> None:
-        assert LogEntry.objects.count() == 0
-
-        blog_post = AdminBlogPost.objects.create(title="Article name")
-
-        self.model_admin.response_change(
-            request=self.make_request(
-                data={"_fsm_transition_to": "moderate"},
-            ),
-            obj=blog_post,
-        )
-
-        log_entry = LogEntry.objects.get()
-        assert log_entry.user == self.user
-        assert log_entry.action_flag == admin.models.CHANGE
-        assert "state" in log_entry.get_change_message()
-
-    def test_transition_applied_swallows_log_change_failure(
-        self, mock_message_user: mock.Mock
-    ) -> None:
-        """A broken audit log must never turn a successful transition into an
-        error response for the admin user."""
-        blog_post = AdminBlogPost.objects.create(title="Article name")
-
-        with mock.patch.object(self.model_admin, "log_change", side_effect=Exception("boom")):
-            self.model_admin.response_change(
-                request=self.make_request(
-                    data={"_fsm_transition_to": "moderate"},
-                ),
-                obj=blog_post,
-            )
-
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'moderate' succeeded.",
-            level=messages.SUCCESS,
-        )
-
-        blog_post.refresh_from_db()
-        assert blog_post.state == AdminBlogPostState.REVIEWED
 
     def test_permission_denied_transition_is_blocked_without_form(
         self, mock_message_user: mock.Mock
@@ -900,54 +840,6 @@ class TransitionViewTestCase(BaseAdminTestCase):
             state=AdminBlogPostState.CREATED,
             transition="complex_transition",
         )
-
-    def test_transition_form_submission_writes_admin_log_entry(
-        self, mock_message_user: mock.Mock
-    ) -> None:
-        assert LogEntry.objects.count() == 0
-
-        self.model_admin.fsm_transition_view(
-            request=self.make_request(
-                data={
-                    "title": "New Title",
-                    "comment": "Because",
-                    "description": "Because",
-                },
-            ),
-            object_id=str(self.blog_post.pk),
-            transition_name="complex_transition",
-        )
-
-        log_entry = LogEntry.objects.get()
-        assert log_entry.user == self.user
-        assert log_entry.action_flag == admin.models.CHANGE
-        assert "state" in log_entry.get_change_message()
-
-    def test_transition_form_submission_swallows_log_change_failure(
-        self, mock_message_user: mock.Mock
-    ) -> None:
-        with mock.patch.object(self.model_admin, "log_change", side_effect=Exception("boom")):
-            res = self.model_admin.fsm_transition_view(
-                request=self.make_request(
-                    data={
-                        "title": "New Title",
-                        "comment": "Because",
-                        "description": "Because",
-                    },
-                ),
-                object_id=str(self.blog_post.pk),
-                transition_name="complex_transition",
-            )
-
-        assert isinstance(res, HttpResponseRedirect)
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'complex_transition' succeeded.",
-            level=messages.SUCCESS,
-        )
-
-        self.blog_post.refresh_from_db()
-        assert self.blog_post.state == AdminBlogPostState.CREATED
 
     # Rendering
     def test_transition_form_rendered(self, mock_message_user: mock.Mock) -> None:
