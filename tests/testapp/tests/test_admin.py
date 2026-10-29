@@ -12,6 +12,7 @@ from django.contrib import messages
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
 from django.http import HttpResponseRedirect
@@ -280,6 +281,11 @@ class ModelAdminTestCase(TestCase):
 
 @patch("django.contrib.admin.options.ModelAdmin.message_user")
 class ResponseChangeViewTestCase(BaseAdminTestCase):
+    def submit_change(self, *, request: WSGIRequest, obj: AdminBlogPost) -> HttpResponse:
+        """Mimic what the admin change view does when saving a valid form."""
+        self.model_admin.save_model(request, obj, form=mock.Mock(), change=True)
+        return self.model_admin.response_change(request=request, obj=obj)
+
     # Classic updates
     @mock.patch("django.contrib.admin.ModelAdmin.response_change")
     def test_classic_update_keep_working(
@@ -290,7 +296,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         blog_post = AdminBlogPost.objects.create(title="Article name")
         assert blog_post.state == AdminBlogPostState.CREATED
 
-        self.model_admin.response_change(
+        self.submit_change(
             request=self.make_request(
                 data={"title": "New Name"},
             ),
@@ -309,7 +315,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         assert blog_post.state == AdminBlogPostState.CREATED
 
         with pytest.raises(AttributeError):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "unknown_transition"},
                 ),
@@ -322,7 +328,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         self.assert_state_log_empty()
 
         with pytest.raises(ValueError, match=r"not an FSM transition"):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "normal_function"},
                 ),
@@ -335,7 +341,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         self.assert_state_log_empty()
 
         with pytest.raises(TypeError, match=r"Attribute 'name_property' is not callable."):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "name_property"},
                 ),
@@ -347,7 +353,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     def test_transition_raised_exception(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.response_change(
+        self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "invalid_without_forms"},
             ),
@@ -366,7 +372,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     ) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.response_change(
+        self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "non_fsm_log_invalid"},
             ),
@@ -391,7 +397,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
             "_execute_fsm_transition",
             side_effect=fsm.TransitionNotAllowed,
         ):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "moderate"},
                 ),
@@ -419,7 +425,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
             "_execute_fsm_transition",
             side_effect=fsm.ConcurrentTransition("error message"),
         ):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "moderate"},
                 ),
@@ -443,7 +449,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         blog_post = AdminBlogPost.objects.create(title="Article name")
         assert blog_post.state == AdminBlogPostState.CREATED
 
-        self.model_admin.response_change(
+        self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "moderate"},
             ),
@@ -467,7 +473,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         blog_post = AdminBlogPost.objects.create(title="Article name")
         assert blog_post.state == AdminBlogPostState.CREATED
 
-        self.model_admin.response_change(
+        self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "publish"},
             ),
@@ -494,7 +500,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
             "tests.testapp.models.AdminBlogPost.moderate",
             side_effect=fsm.ConcurrentTransition("error message"),
         ):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=self.make_request(
                     data={"_fsm_transition_to": "moderate"},
                 ),
@@ -517,7 +523,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         )
 
         with pytest.raises(AttributeError):
-            self.model_admin.response_change(
+            self.submit_change(
                 request=request,
                 obj=self.blog_post,
             )
@@ -527,7 +533,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     ) -> None:
         self.assert_state_log_empty()
 
-        res = self.model_admin.response_change(
+        res = self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "hide"},
             ),
@@ -550,7 +556,7 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     def test_transition_with_form_redirects_properly(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        res = self.model_admin.response_change(
+        res = self.submit_change(
             request=self.make_request(
                 data={"_fsm_transition_to": "complex_transition"},
             ),
@@ -882,3 +888,96 @@ class NoFsmLogModelFormTransitionViewTestCase(ModelFormTransitionViewTestCase):
     """
 
     fsm_log_enabled = False
+
+
+class ChangeFormTransitionSaveTestCase(TestCase):
+    """End-to-end tests: clicking a transition button in the admin change form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_superuser(
+            username="admin",
+            password="password",  # noqa: S106
+        )
+
+    def setUp(self) -> None:
+        # FSMKeyField does not round-trip through ModelForm validation; keep it out of the form.
+        patcher = mock.patch.object(AdminBlogPostAdmin, "readonly_fields", ("key_state",))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client.force_login(self.user)
+        self.blog_post = AdminBlogPost.objects.create(title="Article name")
+        self.url = reverse(
+            "admin:testapp_adminblogpost_change", kwargs={"object_id": self.blog_post.pk}
+        )
+
+    def post_change(self, **extra: typing.Any) -> HttpResponse:
+        data = {
+            "title": "New name",
+            "step": self.blog_post.step,
+            "django_fsm_log-statelog-content_type-object_id-TOTAL_FORMS": "0",
+            "django_fsm_log-statelog-content_type-object_id-INITIAL_FORMS": "0",
+            **extra,
+        }
+        return self.client.post(self.url, data=data)
+
+    def test_transition_button_saves_object_once(self) -> None:
+        with mock.patch.object(
+            AdminBlogPost, "save", autospec=True, side_effect=models.Model.save
+        ) as mock_save:
+            res = self.post_change(_fsm_transition_to="moderate")
+
+        assert res.status_code == HTTPStatus.FOUND
+        assert mock_save.call_count == 1
+
+        self.blog_post.refresh_from_db()
+        assert self.blog_post.state == AdminBlogPostState.REVIEWED
+        assert self.blog_post.title == "New name"
+
+    def test_failed_transition_rolls_back_whole_change(self) -> None:
+        with mock.patch.object(AdminBlogPost, "save", autospec=True) as mock_save:
+            res = self.post_change(_fsm_transition_to="publish")  # not allowed from CREATED
+
+        assert res.status_code == HTTPStatus.FOUND
+        mock_save.assert_not_called()
+
+        self.blog_post.refresh_from_db()
+        assert self.blog_post.state == AdminBlogPostState.CREATED
+        assert self.blog_post.title == "Article name"
+
+    def test_transition_and_save_are_atomic(self) -> None:
+        def failing_save(obj, *args, **kwargs):
+            # Simulate the admin's save succeeding partially, then failing.
+            AdminBlogPost.objects.filter(pk=obj.pk).update(title="partial write")
+            raise RuntimeError("boom")
+
+        with mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save):
+            res = self.post_change(_fsm_transition_to="moderate")
+
+        assert res.status_code == HTTPStatus.FOUND
+
+        self.blog_post.refresh_from_db()
+        assert self.blog_post.state == AdminBlogPostState.CREATED
+        assert self.blog_post.title == "Article name"
+
+
+@patch("django.contrib.admin.options.ModelAdmin.message_user")
+class ApplyFsmTransitionAtomicTestCase(BaseAdminTestCase):
+    def test_failure_rolls_back_partial_writes(self, mock_message_user: mock.Mock) -> None:
+        blog_post = AdminBlogPost.objects.create(title="Article name")
+
+        def failing_save(obj, *args, **kwargs):
+            AdminBlogPost.objects.filter(pk=obj.pk).update(title="partial write")
+            raise RuntimeError("boom")
+
+        with mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save):
+            res = self.model_admin._apply_fsm_transition(
+                obj=blog_post,
+                transition_name="moderate",
+                request=self.make_request(),
+            )
+
+        assert res is False
+        blog_post.refresh_from_db()
+        assert blog_post.title == "Article name"
+        assert blog_post.state == AdminBlogPostState.CREATED
