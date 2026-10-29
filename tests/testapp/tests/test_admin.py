@@ -12,6 +12,7 @@ from django.contrib import messages
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import DatabaseError
 from django.db import models
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
@@ -350,21 +351,18 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
 
         self.assert_state_log_empty()
 
-    def test_transition_raised_exception(self, mock_message_user: mock.Mock) -> None:
+    def test_transition_unexpected_exception_propagates(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        self.submit_change(
-            request=self.make_request(
-                data={"_fsm_transition_to": "invalid_without_forms"},
-            ),
-            obj=self.blog_post,
-        )
+        with pytest.raises(Exception, match=r"You shall not pass!"):
+            self.submit_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "invalid_without_forms"},
+                ),
+                obj=self.blog_post,
+            )
 
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'invalid_without_forms' failed: You shall not pass!.",
-            level=messages.ERROR,
-        )
+        mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
     def test_execute_fsm_transition_falls_back_to_plain_call(
@@ -372,18 +370,66 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     ) -> None:
         self.assert_state_log_empty()
 
-        self.submit_change(
-            request=self.make_request(
-                data={"_fsm_transition_to": "non_fsm_log_invalid"},
-            ),
-            obj=self.blog_post,
-        )
+        with pytest.raises(Exception, match=r"Domain-raised exception"):
+            self.submit_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "non_fsm_log_invalid"},
+                ),
+                obj=self.blog_post,
+            )
+
+        mock_message_user.assert_not_called()
+        self.assert_state_log_empty()
+
+    def test_save_failure_propagates_and_rolls_back_state_log(
+        self, mock_message_user: mock.Mock
+    ) -> None:
+        self.assert_state_log_empty()
+
+        blog_post = AdminBlogPost.objects.create(title="Article name")
+        assert blog_post.state == AdminBlogPostState.CREATED
+
+        with (
+            mock.patch.object(AdminBlogPost, "save", side_effect=DatabaseError("save failed")),
+            pytest.raises(DatabaseError, match=r"save failed"),
+        ):
+            self.submit_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "moderate"},
+                ),
+                obj=blog_post,
+            )
+
+        mock_message_user.assert_not_called()
+        blog_post.refresh_from_db()
+        assert blog_post.state == AdminBlogPostState.CREATED
+        # post_transition already fired (django_fsm_log), the row must be rolled back.
+        self.assert_state_log_empty()
+
+    def test_save_concurrent_transition_rolls_back_state_log(
+        self, mock_message_user: mock.Mock
+    ) -> None:
+        self.assert_state_log_empty()
+
+        blog_post = AdminBlogPost.objects.create(title="Article name")
+
+        with mock.patch.object(
+            AdminBlogPost, "save", side_effect=fsm.ConcurrentTransition("error message")
+        ):
+            self.submit_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "moderate"},
+                ),
+                obj=blog_post,
+            )
 
         mock_message_user.assert_called_once_with(
             request=mock.ANY,
-            message="FSM transition 'non_fsm_log_invalid' failed: Domain-raised exception.",
+            message="FSM transition 'moderate' failed: error message.",
             level=messages.ERROR,
         )
+        blog_post.refresh_from_db()
+        assert blog_post.state == AdminBlogPostState.CREATED
         self.assert_state_log_empty()
 
     def test_response_change_transition_not_allowed(self, mock_message_user: mock.Mock) -> None:
@@ -612,24 +658,21 @@ class TransitionViewTestCase(BaseAdminTestCase):
 
         self.assert_state_log_empty()
 
-    def test_transition_raised_exception(self, mock_message_user: mock.Mock) -> None:
+    def test_transition_unexpected_exception_propagates(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.fsm_transition_view(
-            request=self.make_request(
-                data={
-                    "description": "because",
-                },
-            ),
-            object_id=str(self.blog_post.pk),
-            transition_name="invalid",
-        )
+        with pytest.raises(Exception, match=r"You shall not pass!"):
+            self.model_admin.fsm_transition_view(
+                request=self.make_request(
+                    data={
+                        "description": "because",
+                    },
+                ),
+                object_id=str(self.blog_post.pk),
+                transition_name="invalid",
+            )
 
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'invalid' failed: You shall not pass!.",
-            level=messages.ERROR,
-        )
+        mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
     def test_transition_form_not_allowed(self, mock_message_user: mock.Mock) -> None:
@@ -949,12 +992,13 @@ class ChangeFormTransitionSaveTestCase(TestCase):
         def failing_save(obj, *args, **kwargs):
             # Simulate the admin's save succeeding partially, then failing.
             AdminBlogPost.objects.filter(pk=obj.pk).update(title="partial write")
-            raise RuntimeError("boom")
+            raise DatabaseError("boom")
 
-        with mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save):
-            res = self.post_change(_fsm_transition_to="moderate")
-
-        assert res.status_code == HTTPStatus.FOUND
+        with (
+            mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save),
+            pytest.raises(DatabaseError, match=r"boom"),
+        ):
+            self.post_change(_fsm_transition_to="moderate")
 
         self.blog_post.refresh_from_db()
         assert self.blog_post.state == AdminBlogPostState.CREATED
@@ -968,16 +1012,18 @@ class ApplyFsmTransitionAtomicTestCase(BaseAdminTestCase):
 
         def failing_save(obj, *args, **kwargs):
             AdminBlogPost.objects.filter(pk=obj.pk).update(title="partial write")
-            raise RuntimeError("boom")
+            raise DatabaseError("boom")
 
-        with mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save):
-            res = self.model_admin._apply_fsm_transition(
+        with (
+            mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save),
+            pytest.raises(DatabaseError, match=r"boom"),
+        ):
+            self.model_admin._apply_fsm_transition(
                 obj=blog_post,
                 transition_name="moderate",
                 request=self.make_request(),
             )
 
-        assert res is False
         blog_post.refresh_from_db()
         assert blog_post.title == "Article name"
         assert blog_post.state == AdminBlogPostState.CREATED

@@ -350,17 +350,6 @@ class FSMAdminMixin(_ModelAdmin):
                 level=messages.ERROR,
             )
             return False
-        except Exception as err:
-            logger.exception("Unexpected error during FSM transition %s", transition_name)
-            self.message_user(
-                request=request,
-                message=self.fsm_transition_error_msg.format(
-                    transition_name=transition_name,
-                    error=str(err),
-                ),
-                level=messages.ERROR,
-            )
-            return False
         else:
             self.message_user(
                 request=request,
