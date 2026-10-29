@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 import logging
 import typing
 from dataclasses import dataclass
@@ -167,7 +166,7 @@ class FSMAdminMixin(_ModelAdmin):
                 obj=obj,
                 transition_name=transition_name,
                 request=request,
-                save=functools.partial(super().save_model, request, obj, form, change),
+                save=lambda: super(FSMAdminMixin, self).save_model(request, obj, form, change),
             )
             return
 
