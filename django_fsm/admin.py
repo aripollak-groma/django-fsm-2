@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import typing
 from dataclasses import dataclass
@@ -273,13 +274,28 @@ class FSMAdminMixin(_ModelAdmin):
         kwargs: typing.Mapping[str, typing.Any] | None = None,
     ) -> None:
         kwargs = kwargs or {}
-        if self._is_fsm_log_enabled():
-            try:
-                transition_func(by=request.user, **kwargs)
-            except TypeError:
-                transition_func(**kwargs)
+        if self._is_fsm_log_enabled() and self._accepts_by_argument(transition_func):
+            transition_func(by=request.user, **kwargs)
         else:
             transition_func(**kwargs)
+
+    @staticmethod
+    def _accepts_by_argument(transition_func: typing.Callable[..., typing.Any]) -> bool:
+        # inspect.signature follows ``__wrapped__``, so methods decorated with
+        # ``fsm_log_by`` (which uses ``functools.wraps``) expose the real signature.
+        try:
+            parameters = inspect.signature(transition_func).parameters.values()
+        except (TypeError, ValueError):  # pragma: no cover
+            return False
+        return any(
+            param.kind is inspect.Parameter.VAR_KEYWORD
+            or (
+                param.name == "by"
+                and param.kind
+                in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            )
+            for param in parameters
+        )
 
     def _apply_fsm_transition(
         self,
