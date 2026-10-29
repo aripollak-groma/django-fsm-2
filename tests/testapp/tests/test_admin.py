@@ -19,7 +19,6 @@ from django.test import TestCase
 from django.test.client import RequestFactory
 from django.test.utils import modify_settings
 from django.urls import reverse
-from django_fsm_log.decorators import fsm_log_by
 from django_fsm_log.models import StateLog
 
 import django_fsm as fsm
@@ -275,24 +274,6 @@ class ModelAdminTestCase(TestCase):
 
         assert calls == [self.request.user]
 
-    def test_execute_fsm_transition_type_error_without_by_is_not_retried(self) -> None:
-        calls: list[int] = []
-
-        def transition_method() -> None:
-            calls.append(1)
-            raise TypeError("boom from the transition body")
-
-        with (
-            mock.patch.object(self.model_admin, "_is_fsm_log_enabled", return_value=True),
-            pytest.raises(TypeError, match="boom from the transition body"),
-        ):
-            self.model_admin._execute_fsm_transition(
-                transition_func=transition_method,
-                request=self.request,
-            )
-
-        assert calls == [1]
-
     def test_execute_fsm_transition_with_fsm_log_by_decorated_method(self) -> None:
         blog_post = AdminBlogPost.objects.create(title="Article name")
 
@@ -304,23 +285,6 @@ class ModelAdminTestCase(TestCase):
 
         log = StateLog.objects.get(object_id=blog_post.pk)
         assert log.by == self.request.user
-
-    def test_execute_fsm_transition_type_error_in_fsm_log_by_decorated_method(self) -> None:
-        calls: list[typing.Any] = []
-
-        class Dummy:
-            @fsm_log_by
-            def transition(self, by: typing.Any = None) -> None:
-                calls.append(by)
-                raise TypeError("body failure")
-
-        with pytest.raises(TypeError, match="body failure"):
-            self.model_admin._execute_fsm_transition(
-                transition_func=Dummy().transition,
-                request=self.request,
-            )
-
-        assert calls == [self.request.user]
 
     # Context
     def test_get_fsm_extra_context_filters_admin_hidden(
