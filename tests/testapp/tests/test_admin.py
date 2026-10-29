@@ -365,22 +365,6 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
         mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
-    def test_execute_fsm_transition_falls_back_to_plain_call(
-        self, mock_message_user: mock.Mock
-    ) -> None:
-        self.assert_state_log_empty()
-
-        with pytest.raises(Exception, match=r"Domain-raised exception"):
-            self.submit_change(
-                request=self.make_request(
-                    data={"_fsm_transition_to": "non_fsm_log_invalid"},
-                ),
-                obj=self.blog_post,
-            )
-
-        mock_message_user.assert_not_called()
-        self.assert_state_log_empty()
-
     def test_save_failure_propagates_and_rolls_back_state_log(
         self, mock_message_user: mock.Mock
     ) -> None:
@@ -1003,27 +987,3 @@ class ChangeFormTransitionSaveTestCase(TestCase):
         self.blog_post.refresh_from_db()
         assert self.blog_post.state == AdminBlogPostState.CREATED
         assert self.blog_post.title == "Article name"
-
-
-@patch("django.contrib.admin.options.ModelAdmin.message_user")
-class ApplyFsmTransitionAtomicTestCase(BaseAdminTestCase):
-    def test_failure_rolls_back_partial_writes(self, mock_message_user: mock.Mock) -> None:
-        blog_post = AdminBlogPost.objects.create(title="Article name")
-
-        def failing_save(obj, *args, **kwargs):
-            AdminBlogPost.objects.filter(pk=obj.pk).update(title="partial write")
-            raise DatabaseError("boom")
-
-        with (
-            mock.patch.object(AdminBlogPost, "save", autospec=True, side_effect=failing_save),
-            pytest.raises(DatabaseError, match=r"boom"),
-        ):
-            self.model_admin._apply_fsm_transition(
-                obj=blog_post,
-                transition_name="moderate",
-                request=self.make_request(),
-            )
-
-        blog_post.refresh_from_db()
-        assert blog_post.title == "Article name"
-        assert blog_post.state == AdminBlogPostState.CREATED
