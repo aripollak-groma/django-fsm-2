@@ -9,6 +9,7 @@ Unreleased
 - Add Django 6.1 support
 - Add ``TransitionConditionsUnmet`` with ``failed_condition`` for unmet conditions
 - Add ``NoTransition`` and ``InvalidTransition`` subclasses for ``TransitionNotAllowed``
+- Admin: only handle ``TransitionNotAllowed``/``ConcurrentTransition`` when applying a transition; other exceptions now propagate instead of being swallowed
 
 
 django-fsm-2 4.2.4 2026-03-16

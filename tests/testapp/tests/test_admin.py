@@ -344,21 +344,18 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
 
         self.assert_state_log_empty()
 
-    def test_transition_raised_exception(self, mock_message_user: mock.Mock) -> None:
+    def test_transition_unexpected_exception_propagates(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.response_change(
-            request=self.make_request(
-                data={"_fsm_transition_to": "invalid_without_forms"},
-            ),
-            obj=self.blog_post,
-        )
+        with pytest.raises(Exception, match=r"You shall not pass!"):
+            self.model_admin.response_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "invalid_without_forms"},
+                ),
+                obj=self.blog_post,
+            )
 
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'invalid_without_forms' failed: You shall not pass!.",
-            level=messages.ERROR,
-        )
+        mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
     def test_execute_fsm_transition_falls_back_to_plain_call(
@@ -366,18 +363,15 @@ class ResponseChangeViewTestCase(BaseAdminTestCase):
     ) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.response_change(
-            request=self.make_request(
-                data={"_fsm_transition_to": "non_fsm_log_invalid"},
-            ),
-            obj=self.blog_post,
-        )
+        with pytest.raises(Exception, match=r"Domain-raised exception"):
+            self.model_admin.response_change(
+                request=self.make_request(
+                    data={"_fsm_transition_to": "non_fsm_log_invalid"},
+                ),
+                obj=self.blog_post,
+            )
 
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'non_fsm_log_invalid' failed: Domain-raised exception.",
-            level=messages.ERROR,
-        )
+        mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
     def test_response_change_transition_not_allowed(self, mock_message_user: mock.Mock) -> None:
@@ -606,24 +600,21 @@ class TransitionViewTestCase(BaseAdminTestCase):
 
         self.assert_state_log_empty()
 
-    def test_transition_raised_exception(self, mock_message_user: mock.Mock) -> None:
+    def test_transition_unexpected_exception_propagates(self, mock_message_user: mock.Mock) -> None:
         self.assert_state_log_empty()
 
-        self.model_admin.fsm_transition_view(
-            request=self.make_request(
-                data={
-                    "description": "because",
-                },
-            ),
-            object_id=str(self.blog_post.pk),
-            transition_name="invalid",
-        )
+        with pytest.raises(Exception, match=r"You shall not pass!"):
+            self.model_admin.fsm_transition_view(
+                request=self.make_request(
+                    data={
+                        "description": "because",
+                    },
+                ),
+                object_id=str(self.blog_post.pk),
+                transition_name="invalid",
+            )
 
-        mock_message_user.assert_called_once_with(
-            request=mock.ANY,
-            message="FSM transition 'invalid' failed: You shall not pass!.",
-            level=messages.ERROR,
-        )
+        mock_message_user.assert_not_called()
         self.assert_state_log_empty()
 
     def test_transition_form_not_allowed(self, mock_message_user: mock.Mock) -> None:
